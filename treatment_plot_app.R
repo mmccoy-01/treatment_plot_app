@@ -1,6 +1,7 @@
 # Load libraries for app.R
 library(shiny)
 library(tidyverse)
+library(plotly)
 
 ui <- fluidPage(
   titlePanel("Treatment Plot"),
@@ -22,9 +23,17 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   processed_data <- reactive({
     req(input$file)
-    df <- read.csv(input$file$datapath) %>%
-      mutate(days_from_trt = floor(as.numeric(difftime(imaging_date, as.Date(df$trt_injection_date[1], format = "%Y-%m-%d"), units = "days")))) %>%
+    df <- read.csv(input$file$datapath)
+    
+    # Ensure date columns are properly formatted
+    df <- df %>%
+      mutate(
+        trt_injection_date = as.Date(trt_injection_date, format = "%Y-%m-%d"),
+        imaging_date = as.Date(imaging_date, format = "%Y-%m-%d"),
+        days_from_trt = floor(as.numeric(difftime(imaging_date, trt_injection_date[1], units = "days")))
+      ) %>%
       relocate(days_from_trt, .before = imaging_date)
+    
     df
   })
   
