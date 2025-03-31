@@ -3,6 +3,16 @@ library(shiny)
 library(tidyverse)
 library(plotly)
 
+# Set the working directory to the location of the current script. Use this only when running code chunks interactively, not when rendering the entire document.
+#setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+# Do not run this code or update the renv.lock file, as it reflects the original state when the code was written and executed.
+#renv::snapshot(lockfile = "renv.lock")
+
+# Do not run this code or update the manifest.json file, as it reflects the original state when the code was written and executed.
+#rsconnect::writeManifest()
+
+
 ui <- fluidPage(
   titlePanel("Treatment Plot"),
   sidebarLayout(
