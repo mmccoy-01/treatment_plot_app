@@ -1,10 +1,6 @@
-This is a `shiny` application that randomizes mice to treatment arms based on their bioluminescent flux values. The point of this is to reduce experimental bias by making sure that mice are at equivalent levels of disease burden before treatment assignment.
+This is a `shiny` application that uses `plotly` to visualize treatment arms based on their bioluminescent flux values. The point of this is to have the `shiny` application hosted on a server.
+
+The main issue is that my `.qmd` dashboard, built with the Quarto framework, fails to render when published on `connect.posit.cloud`, likely due to the embedded `shinylive`. The problem arises because the Plotly component of the line graph in my Shiny app requires a server, and I use `shinylive` to enable the Shiny app to run entirely in the client’s browser, but this is probably causing the error. To resolve this, I plan to replace the Plotly card in the dashboard with an `<iframe>` that points to a separate `.R` script hosted on a Shiny server (e.g., `shinyapps.io`). This hosted Shiny app will handle the Plotly visualization, allowing users to upload the `processed_data.csv` file directly within that environment. This ended up working but the .qmd dashboard doesn't render as a neat and orderly dashboard any more. Instead, it renders as disorganized jarbled plain text. I think there's an issue with the .html output that's happening due to the IVIS images loop.
 
 ## How it works:
-The user uploads a .csv file of bioluminescent mouse data computed from Living Image™. The user selects which mice will be non-study and defines the number of arms and the number of mice per arm. The randomization process searches for the seed that has the least amount of total_flux variability both between and within groups. The 'total_variability' metric is a combined metric that accounts for both between-group and within-group variability by using the sum of the standard deviations of the mean total flux between groups and the standard deviations within groups. This metric is on a user-selected scale which allows for preferential weighting to either the variability between groups or within groups.
-
-## Format of .csv file input:
-This is how your columns should be named:
-cage_number,	id,	ear_punch,	imaging_date,	total_flux,	avg_radiance
-
-* imaging_date is in ISO 8601 international standard which expresses a date as “2001-02-13” (yyyy-mm-dd)
+The user uploads a .csv file of processed_data.csv.
