@@ -1,0 +1,252 @@
+---
+title: "Mouse Randomization App"
+author: "Michael McCoy"
+nav-buttons:
+- icon: github
+  href: https://github.com/mmccoy-01
+- icon: linkedin
+  href: https://www.linkedin.com/in/themichaelmccoy
+runtime: shiny
+format: html
+---
+
+```{r Setup}
+#| context: setup
+#| echo: false
+#| warning: false
+
+# Load libraries
+library(shiny)
+library(tidyverse)
+#setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+```{r}
+#| echo: false
+
+# Define UI for app
+ui <- fluidPage(
+  titlePanel("Mouse Randomization App"),
+  sidebarLayout(
+    sidebarPanel(
+      fileInput("file1", "Choose CSV File",
+                multiple = FALSE,
+                accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv")),
+      tags$hr(),
+      textInput("exclude_ids", "Enter non-study mice IDs (comma separated)", value = ""),
+      tags$hr(),
+      numericInput("num_arms", "How many arms?", value = 1, min = 1),
+      uiOutput("arm_names_ui"),
+      tags$hr(),
+      uiOutput("mice_per_arm_ui"),
+      tags$hr(),
+      textInput("seed_input", "Enter seed value (optional)", value = ""),
+      numericInput("num_seeds", "Number of seeds to try", value = 5000, min = 1),
+      sliderInput("weight_slider", "Adjust Weighting (0% = Between-subjects, 100% = Within-subjects)",
+                  min = 0, max = 100, value = 0),
+      radioButtons("randomize_by", "Randomize by:", choices = list("Flux" = "total_flux", "Radiance" = "avg_radiance"), selected = "total_flux"),
+      actionButton("randomize", "Ready to Randomize"),
+      downloadButton("download_data", "Download Table")
+    ),
+    mainPanel(
+      plotOutput("initial_plot"),
+      tableOutput("contents"),
+      textOutput("best_seed_output"),
+      tableOutput("mean_value_output"),
+      tableOutput("assignment_results"),
+      plotOutput("plot")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+  
+  data <- reactive({
+    req(input$file1)
+    read.csv(input$file1$datapath, header = TRUE, sep = ",")
+  })
+  
+  filtered_data <- reactive({
+    df <- data()
+    if (input$exclude_ids != "") {
+      exclude_ids <- strsplit(input$exclude_ids, ",")[[1]] %>% trimws()
+      df <- df %>% filter(!id %in% exclude_ids)
+    }
+    df
+  })
+  
+  output$initial_plot <- renderPlot({
+    df <- data()
+    column_to_plot <- input$randomize_by
+    order_by_value <- df %>% arrange(!!sym(column_to_plot)) %>% pull(id)
+    
+    df %>%
+      ggplot(aes(x = factor(id, levels = order_by_value), y = !!sym(column_to_plot), color = imaging_date)) +
+      geom_point() +
+      scale_color_manual(values = setNames(rainbow(length(unique(df$imaging_date))), unique(df$imaging_date))) +
+      scale_y_log10() +
+      labs(x = "Mouse Number", y = ifelse(column_to_plot == "total_flux", "Total Flux", "Average Radiance"), color = "Imaging Date") +
+      theme_minimal()
+  })
+  
+  output$arm_names_ui <- renderUI({
+    num_arms <- input$num_arms
+    if (num_arms > 0) {
+      lapply(1:num_arms, function(i) {
+        textInput(paste0("arm_", i), paste("Name of arm", i))
+      })
+    }
+  })
+  
+  output$mice_per_arm_ui <- renderUI({
+    num_arms <- input$num_arms
+    if (num_arms > 0) {
+      lapply(1:num_arms, function(i) {
+        numericInput(paste0("mice_per_arm_", i), paste("Number of mice in arm", i), value = 1, min = 1)
+      })
+    }
+  })
+  
+  assign_groups <- function(data, num_groups, num_per_group, column) {
+    trt <- integer(nrow(data))
+    mean_values <- data.frame(Group = 1:num_groups, Mean_Value = numeric(num_groups))
+    data <- data[sample(nrow(data)), ]
+    
+    for (i in 1:num_groups) {
+      group_data <- data[((i - 1) * num_per_group + 1):(i * num_per_group), ]
+      mean_value <- mean(group_data[[column]])
+      trt[((i - 1) * num_per_group + 1):(i * num_per_group)] <- i
+      mean_values[i, 2] <- mean_value
+    }
+    
+    data$trt <- trt
+    list(Data = data, Mean_Values = mean_values)
+  }
+  
+  observeEvent(input$randomize, {
+    req(input$num_arms)
+    num_arms <- input$num_arms
+    arm_names <- sapply(1:num_arms, function(i) input[[paste0("arm_", i)]])
+    num_per_arm <- sapply(1:num_arms, function(i) input[[paste0("mice_per_arm_", i)]])
+    num_seeds <- input$num_seeds
+    seed_input <- input$seed_input
+    weight_within <- input$weight_slider / 100
+    weight_between <- 1 - weight_within
+    column_to_randomize <- input$randomize_by
+    
+    filtered_df <- filtered_data()
+    
+    best_seed <- NULL
+    best_variability <- Inf
+    
+    if (seed_input != "") {
+      set.seed(as.numeric(seed_input))
+      result <- assign_groups(filtered_df, num_arms, num_per_arm, column_to_randomize)
+      
+      between_group_variability <- sd(result$Mean_Values$Mean_Value)
+      within_group_variability <- result$Data %>%
+        group_by(trt) %>%
+        summarise(within_sd = sd(!!sym(column_to_randomize))) %>%
+        summarise(total_within_sd = sum(within_sd)) %>%
+        pull(total_within_sd)
+      
+      total_variability <- (weight_between * between_group_variability) + (weight_within * within_group_variability)
+      
+      best_seed <- as.numeric(seed_input)
+      best_variability <- total_variability
+      
+      output$best_seed_output <- renderText({
+        paste("Seed inputted by user:", best_seed)
+      })
+    } else {
+      withProgress(message = 'Randomizing...', value = 0, {
+        for (seed in 1:num_seeds) {
+          set.seed(seed)
+          result <- assign_groups(filtered_df, num_arms, num_per_arm, column_to_randomize)
+          
+          between_group_variability <- sd(result$Mean_Values$Mean_Value)
+          within_group_variability <- result$Data %>%
+            group_by(trt) %>%
+            summarise(within_sd = sd(!!sym(column_to_randomize))) %>%
+            summarise(total_within_sd = sum(within_sd)) %>%
+            pull(total_within_sd)
+          
+          total_variability <- (weight_between * between_group_variability) + (weight_within * within_group_variability)
+          
+          if (total_variability < best_variability) {
+            best_variability <- total_variability
+            best_seed <- seed
+          }
+          
+          incProgress(1 / num_seeds, detail = paste("Seed", seed))
+        }
+      })
+      
+      output$best_seed_output <- renderText({
+        paste("Seed with the least variability:", best_seed)
+      })
+    }
+    
+    set.seed(best_seed)
+    final_result <- assign_groups(filtered_df, num_arms, num_per_arm, column_to_randomize)
+    
+    final_result$Data <- final_result$Data %>%
+      mutate(Arm = factor(trt, levels = 1:num_arms, labels = arm_names))
+    
+    all_data <- data()
+    if (input$exclude_ids != "") {
+      exclude_ids <- strsplit(input$exclude_ids, ",")[[1]] %>% trimws()
+      non_study_data <- all_data %>%
+        filter(id %in% exclude_ids) %>%
+        mutate(Arm = "Non-study")
+      
+      final_result$Data <- bind_rows(final_result$Data, non_study_data)
+    }
+    
+    final_result$Data <- final_result$Data %>%
+      select(-trt) %>%
+      arrange(id) %>%
+      relocate(Arm, .before = imaging_date)
+    
+    output$assignment_results <- renderTable({
+      final_result$Data
+    })
+    
+    mean_values <- final_result$Data %>%
+      group_by(Arm) %>%
+      summarise(mean_value = mean(!!sym(column_to_randomize)))
+    
+    output$mean_value_output <- renderTable({
+      mean_values
+    }, colnames = TRUE, rownames = FALSE)
+    
+    output$plot <- renderPlot({
+      processed_data <- final_result$Data
+      processed_data$trt <- factor(processed_data$Arm, levels = unique(processed_data$Arm[order(processed_data$Arm)]))
+      
+      ggplot(data = processed_data,
+             aes(x = trt, y = !!sym(column_to_randomize), color = trt, label = id)) +
+        geom_jitter(position = position_dodge2(width = 0.7), size = 3) +
+        geom_text(position = position_dodge2(width = 0.7), vjust = -1, size = 3) +
+        labs(x = "Treatment", y = ifelse(column_to_randomize == "total_flux", "Flux [p/s]", "Radiance [p/s/cm²/sr]"), color = "Treatment") +
+        theme_minimal()
+    })
+output$download_data <- downloadHandler(
+  filename = function() {
+    paste(Sys.Date(), ".csv", sep = "")
+  },
+  content = function(file) {
+    write.csv(final_result$Data, file, row.names = FALSE)
+  }
+)
+  })
+  
+  output$contents <- renderTable({
+    filtered_data()
+  })
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+```

@@ -1,0 +1,82 @@
+# Load libraries for app.R
+library(shiny)
+library(tidyverse)
+
+ui <- fluidPage(
+  titlePanel("Treatment Plot"),
+  sidebarLayout(
+    sidebarPanel(
+      fileInput("file", "Upload Processed Data CSV", accept = ".csv"),
+      selectInput("pdx", "Select PDX:", choices = NULL),
+      checkboxInput("include_non_study", "Include Non-Study", value = TRUE),
+      selectInput("y_axis", "Y-Axis:", choices = c("total_flux", "radiance")),
+      selectInput("calculation_type", "Calculation Type:", choices = c("Individual", "Mean", "Median"))
+    ),
+    mainPanel(
+      plotlyOutput("scatter_plot"),
+      tableOutput("data")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  processed_data <- reactive({
+    req(input$file)
+    df <- read.csv(input$file$datapath) %>%
+      mutate(days_from_trt = floor(as.numeric(difftime(imaging_date, as.Date(df$trt_injection_date[1], format = "%Y-%m-%d"), units = "days")))) %>%
+      relocate(days_from_trt, .before = imaging_date)
+    df
+  })
+  
+  observeEvent(processed_data(), {
+    updateSelectInput(session, "pdx", choices = unique(processed_data()$tumor_injection))
+  })
+  
+  selected_data <- reactive({
+    data <- processed_data()[processed_data()$tumor_injection == input$pdx, ]
+    if (!input$include_non_study) {
+      data <- data[data$trt != "Non-study", ]
+    }
+    data
+  })
+  
+  output$scatter_plot <- renderPlotly({
+    y_axis_title <- if (input$y_axis == "total_flux") "Flux [p/s]" else "Radiance [p/s/cm^2/sr]"
+    y_axis_label <- if (input$y_axis == "total_flux") "Flux" else "Radiance"
+    
+    if (input$calculation_type == "Individual") {
+      p <- selected_data() %>%
+        mutate(trt = reorder(trt, trt_factor)) %>%
+        group_by(trt, id) %>%
+        plot_ly(x = ~days_from_trt + runif(length(days_from_trt), -0.3, 0.3), y = ~get(input$y_axis),
+                type = 'scatter', mode = 'lines+markers',
+                color = ~trt, legendgroup = ~trt,
+                name = ~trt, hoverinfo = "text",
+                text = ~paste("Imaging Date: ", imaging_date, "<br>ID: ", id, "<br>", y_axis_label, ": ", sprintf("%.2e", get(input$y_axis)))) %>%
+        layout(yaxis = list(type = "log", title = y_axis_title),
+               xaxis = list(type = "linear", title = "Days from Treatment"),
+               showlegend = TRUE)
+    } else {
+      data_summary <- selected_data() %>%
+        group_by(days_from_trt, trt, imaging_date) %>%
+        summarise(y_value = ifelse(input$calculation_type == "Mean", mean(get(input$y_axis)), median(get(input$y_axis))))
+      
+      p <- data_summary %>%
+        plot_ly(x = ~days_from_trt + runif(length(days_from_trt), -0.3, 0.3), y = ~y_value,
+                type = 'scatter', mode = 'lines+markers',
+                color = ~trt, legendgroup = ~trt,
+                name = ~trt, hoverinfo = "text",
+                text = ~paste("Imaging Date: ", imaging_date, "<br>", y_axis_label, ": ", sprintf("%.2e", y_value))) %>%
+        layout(yaxis = list(type = "log", title = y_axis_title),
+               xaxis = list(type = "linear", title = "Days from Treatment"),
+               showlegend = TRUE)
+    }
+    p
+  })
+  
+  output$data <- renderTable({
+    selected_data()
+  })
+}
+
+shinyApp(ui, server)
